@@ -73,6 +73,7 @@ class FixExecutionAgent:
         format_issue_count = {}  # (lang, file) -> int
         non_format_issues = []
 
+        llm_issues = []
         for issue in issues:
             lang = issue.get("language", "").lower()
             file = issue.get("file")
@@ -83,8 +84,24 @@ class FixExecutionAgent:
             if typ == "format":
                 format_files[lang].add(file)
                 format_issue_count[(lang, file)] = format_issue_count.get((lang, file), 0) + 1
+            elif typ == "llm":
+                llm_issues.append(issue)
             else:
                 non_format_issues.append(issue)
+        # 2.5. 处理 LLM 修复问题
+        for issue in llm_issues:
+            try:
+                result = await self.fix_with_llm(issue, project_path)
+                if result.get("success"):
+                    results["fixed_issues"] += 1
+                    if result.get("changes"):
+                        results["changes"].extend(result["changes"])
+                else:
+                    results["failed_issues"] += 1
+                    results["errors"].append(result.get("message", "未知错误"))
+            except Exception as e:
+                results["failed_issues"] += 1
+                results["errors"].append(str(e))
 
         # 2. 处理格式化问题（每个文件只修一次，fixed_issues统计所有格式化问题数）
         fix_results_by_file = {}
@@ -217,13 +234,69 @@ class FixExecutionAgent:
     async def fix_with_llm(
         self, issue: Dict[str, Any], project_path: str
     ) -> Dict[str, Any]:
-        """调用大模型修复非Python问题（这里保留伪逻辑）"""
+        """调用 DeepSeek LLM 修复非Python问题，生成_llm_fixed新文件"""
+        import os
+        import requests
         file_path = os.path.join(project_path, issue["file"])
-        return {
-            "success": False,
-            "changes": [],
-            "message": f"请用LLM修复 {issue.get('language', '')} 文件 {file_path} 的问题: {issue.get('message', '')}",
-        }
+        base, ext = os.path.splitext(file_path)
+        llm_fixed_file = base + "_llm_fixed" + ext
+        api_key = "sk-75db9bf464d44ee78b5d45a655431710"
+        if not api_key:
+            return {
+                "success": False,
+                "changes": [],
+                "message": "未配置 DEEPSEEK_API_KEY 环境变量，无法调用 DeepSeek API。"
+            }
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            prompt = (
+                f"请修复以下{issue.get('language', '')}代码中的问题：\n"
+                f"{content}\n\n"
+                f"# 问题描述：{issue.get('message', '')}\n"
+                f"\n请只输出修复后的完整代码，不要任何解释、注释或 markdown 格式。"
+            )
+            # DeepSeek API 调用
+            url = "https://api.deepseek.com/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "model": "deepseek-coder",
+                "messages": [
+                    {"role": "system", "content": "你是专业的代码修复助手。"},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.2,
+                "max_tokens": 2048
+            }
+            resp = requests.post(url, headers=headers, json=data, timeout=60)
+            resp.raise_for_status()
+            result = resp.json()
+            # 解析 DeepSeek 返回的修复代码
+            llm_content = result["choices"][0]["message"]["content"]
+            # 只提取首个代码块内容
+            import re
+            code_match = re.search(r"```[a-zA-Z]*\n([\s\S]*?)```", llm_content)
+            if code_match:
+                llm_code = code_match.group(1).strip()
+            else:
+                # 若无代码块，直接用原始内容
+                llm_code = llm_content.strip()
+            with open(llm_fixed_file, "w", encoding="utf-8") as f:
+                f.write(llm_code)
+            return {
+                "success": True,
+                "changes": [f"LLM修复文件已生成: {llm_fixed_file}"],
+                "message": f"DeepSeek修复完成，修复文件: {llm_fixed_file}",
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "changes": [],
+                "message": f"DeepSeek修复失败: {e}",
+            }
 
     async def get_fix_summary(self, results: Dict[str, Any]) -> str:
         """生成修复摘要"""

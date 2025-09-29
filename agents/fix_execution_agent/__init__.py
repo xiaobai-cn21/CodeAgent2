@@ -4,6 +4,6 @@
 """
 
 from .agent import FixExecutionAgent
-from .fixer import CodeFixer, Refactorer, DependencyUpdater
+from .fixer import CodeFixer
 
 __all__ = ['FixExecutionAgent', 'CodeFixer', 'Refactorer', 'DependencyUpdater']

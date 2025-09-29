@@ -1,11 +1,11 @@
-# 测试 JavaScript 格式化
+
 
 test_task = {
-    "task_id": "test_js_001",
-    "file_path": "main.js",
+    "task_id": "test_go_llm_001",
+    "file_path": "agents/fix_execution_agent/main.go",
     "issues_by_priority": {
         "high": [
-            {"language": "javascript", "file": "main.js", "type": "format", "message": "格式化问题"}
+            {"language": "go", "file": "main.go", "type": "llm", "message": "请修复语法和风格问题"}
         ]
     }
 }
